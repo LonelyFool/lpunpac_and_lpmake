@@ -1,11 +1,17 @@
 // Copyright 2010 The Android Open Source Project
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 cc_library {
     name: "libsparse",
     host_supported: true,
     ramdisk_available: true,
+    vendor_ramdisk_available: true,
     recovery_available: true,
     unique_host_soname: true,
+    vendor_available: true,
     srcs: [
         "backed_block.cpp",
         "output_file.cpp",
@@ -22,15 +28,21 @@ cc_library {
         "libbase",
     ],
     target: {
+        darwin: {
+            enabled: true,
+        },
         windows: {
             enabled: true,
         },
     },
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.virt",
+    ],
 }
 
-cc_binary {
+cc_binary_host {
     name: "simg2img",
-    host_supported: true,
     srcs: [
         "simg2img.cpp",
         "sparse_crc32.cpp",
@@ -42,11 +54,15 @@ cc_binary {
     ],
 
     cflags: ["-Werror"],
+    target: {
+        darwin: {
+            enabled: true,
+        },
+    },
 }
 
-cc_binary {
+cc_binary_host {
     name: "img2simg",
-    host_supported: true,
     srcs: ["img2simg.cpp"],
     static_libs: [
         "libsparse",
@@ -70,28 +86,26 @@ cc_binary_host {
 }
 
 python_binary_host {
-    name: "simg_dump.py",
+    name: "simg_dump",
     main: "simg_dump.py",
     srcs: ["simg_dump.py"],
     version: {
-        py2: {
-            embedded_launcher: true,
-            enabled: true,
-        },
         py3: {
-            enabled: false,
+            embedded_launcher: true,
         },
     },
 }
 
 cc_fuzz {
     name: "sparse_fuzzer",
-    host_supported: false,
+    host_supported: true,
     srcs: [
         "sparse_fuzzer.cpp",
     ],
     static_libs: [
         "libsparse",
+        "libbase",
+        "libz",
         "liblog",
     ],
 }
