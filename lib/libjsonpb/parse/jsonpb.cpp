@@ -33,40 +33,40 @@ using google::protobuf::util::TypeResolver;
 static constexpr char kTypeUrlPrefix[] = "type.googleapis.com";
 
 std::string GetTypeUrl(const Message& message) {
-    return std::string(kTypeUrlPrefix) + "/" + message.GetDescriptor()->full_name();
+  return std::string(kTypeUrlPrefix) + "/" + message.GetDescriptor()->full_name();
 }
 
 ErrorOr<std::string> MessageToJsonString(const Message& message) {
-    std::unique_ptr<TypeResolver> resolver(
-            NewTypeResolverForDescriptorPool(kTypeUrlPrefix, DescriptorPool::generated_pool()));
+  std::unique_ptr<TypeResolver> resolver(
+      NewTypeResolverForDescriptorPool(kTypeUrlPrefix, DescriptorPool::generated_pool()));
 
-    google::protobuf::util::JsonOptions options;
-    options.add_whitespace = true;
+  google::protobuf::util::JsonPrintOptions options;
+  options.add_whitespace = true;
 
-    std::string json;
-    auto status = BinaryToJsonString(resolver.get(), GetTypeUrl(message),
-                                     message.SerializeAsString(), &json, options);
+  std::string json;
+  auto status = BinaryToJsonString(resolver.get(), GetTypeUrl(message), message.SerializeAsString(),
+                                   &json, options);
 
-    if (!status.ok()) {
-        return MakeError<std::string>(status.error_message().as_string());
-    }
-    return ErrorOr<std::string>(std::move(json));
+  if (!status.ok()) {
+    return MakeError<std::string>(std::string(status.message()));
+  }
+  return ErrorOr<std::string>(std::move(json));
 }
 
 namespace internal {
 ErrorOr<std::monostate> JsonStringToMessage(const std::string& content, Message* message) {
-    std::unique_ptr<TypeResolver> resolver(
-            NewTypeResolverForDescriptorPool(kTypeUrlPrefix, DescriptorPool::generated_pool()));
+  std::unique_ptr<TypeResolver> resolver(
+      NewTypeResolverForDescriptorPool(kTypeUrlPrefix, DescriptorPool::generated_pool()));
 
-    std::string binary;
-    auto status = JsonToBinaryString(resolver.get(), GetTypeUrl(*message), content, &binary);
-    if (!status.ok()) {
-        return MakeError<std::monostate>(status.error_message().as_string());
-    }
-    if (!message->ParseFromString(binary)) {
-        return MakeError<std::monostate>("Fail to parse.");
-    }
-    return ErrorOr<std::monostate>();
+  std::string binary;
+  auto status = JsonToBinaryString(resolver.get(), GetTypeUrl(*message), content, &binary);
+  if (!status.ok()) {
+    return MakeError<std::monostate>(std::string(status.message()));
+  }
+  if (!message->ParseFromString(binary)) {
+    return MakeError<std::monostate>("Fail to parse.");
+  }
+  return ErrorOr<std::monostate>();
 }
 }  // namespace internal
 

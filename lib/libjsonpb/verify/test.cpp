@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 #include <limits>
 
 #include <sstream>
@@ -46,15 +45,12 @@ class JsonKeyTest : public LibJsonpbVerifyTest {
   }
 
   template <typename T>
-  void TestParseOkWithUnknownKey(const std::string& field_name,
-                                 const std::string& json_key) {
+  void TestParseOkWithUnknownKey(const std::string& field_name, const std::string& json_key) {
     std::string json = "{\"" + json_key + "\": \"test\"}";
     auto object = JsonStringToMessage<T>(json);
     ASSERT_TRUE(object.ok()) << object.error();
-    EXPECT_EQ(
-        "test",
-        object->GetReflection()->GetString(
-            *object, object->GetDescriptor()->FindFieldByName(field_name)));
+    EXPECT_EQ("test", object->GetReflection()->GetString(
+                          *object, object->GetDescriptor()->FindFieldByName(field_name)));
     std::string error;
     ASSERT_FALSE(AllFieldsAreKnown(*object, json, &error))
         << "AllFieldsAreKnown should return false";
@@ -148,8 +144,7 @@ TEST_F(JsonKeyTest, NoJsonNameQuxQuux) {
 
 class EmbeddedJsonKeyTest : public LibJsonpbVerifyTest {
  public:
-  ErrorOr<Parent> TestEmbeddedError(const std::string& json,
-                                    const std::string& unknown_key) {
+  ErrorOr<Parent> TestEmbeddedError(const std::string& json, const std::string& unknown_key) {
     auto object = JsonStringToMessage<Parent>(json);
     if (!object.ok()) return object;
     std::string error;
@@ -184,30 +179,28 @@ TEST_F(EmbeddedJsonKeyTest, Ok) {
 }
 
 TEST_F(EmbeddedJsonKeyTest, FooBar) {
-  auto object = TestEmbeddedError(
-      "{\"with_json_name\": {\"foo_bar\": \"test\"}}", "foo_bar");
+  auto object = TestEmbeddedError("{\"with_json_name\": {\"foo_bar\": \"test\"}}", "foo_bar");
   ASSERT_TRUE(object.ok()) << object.error();
   EXPECT_EQ("test", object->with_json_name().foo_bar());
 }
 
 TEST_F(EmbeddedJsonKeyTest, BarBaz) {
-  auto object = TestEmbeddedError(
-      "{\"repeated_with_json_name\": [{\"barBaz\": \"test\"}]}", "barBaz");
+  auto object =
+      TestEmbeddedError("{\"repeated_with_json_name\": [{\"barBaz\": \"test\"}]}", "barBaz");
   ASSERT_TRUE(object.ok()) << object.error();
   ASSERT_EQ(1u, object->repeated_with_json_name().size());
   EXPECT_EQ("test", object->repeated_with_json_name().begin()->barbaz());
 }
 
 TEST_F(EmbeddedJsonKeyTest, NoJsonName) {
-  auto object = TestEmbeddedError(
-      "{\"no_json_name\": {\"QUXQUUX\": \"test\"}}", "QUXQUUX");
+  auto object = TestEmbeddedError("{\"no_json_name\": {\"QUXQUUX\": \"test\"}}", "QUXQUUX");
   ASSERT_TRUE(object.ok()) << object.error();
   EXPECT_EQ("test", object->no_json_name().qux_quux());
 }
 
 TEST_F(EmbeddedJsonKeyTest, QuxQuux) {
-  auto object = TestEmbeddedError(
-      "{\"repeated_no_json_name\": [{\"QUXQUUX\": \"test\"}]}", "QUXQUUX");
+  auto object =
+      TestEmbeddedError("{\"repeated_no_json_name\": [{\"QUXQUUX\": \"test\"}]}", "QUXQUUX");
   ASSERT_TRUE(object.ok()) << object.error();
   ASSERT_EQ(1u, object->repeated_no_json_name().size());
   EXPECT_EQ("test", object->repeated_no_json_name().begin()->qux_quux());
@@ -215,24 +208,23 @@ TEST_F(EmbeddedJsonKeyTest, QuxQuux) {
 
 class ScalarTest : public LibJsonpbVerifyTest {
  public:
-  ::testing::AssertionResult IsJsonEq(const std::string& l,
-                                      const std::string& r) {
-    Json::Reader reader;
+  ::testing::AssertionResult IsJsonEq(const std::string& l, const std::string& r) {
+    Json::CharReaderBuilder builder;
+    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
     Json::Value lvalue;
-    if (!reader.parse(l, lvalue))
-      return ::testing::AssertionFailure()
-             << reader.getFormattedErrorMessages();
+    std::string errorMessage;
+    if (!reader->parse(&*l.begin(), &*l.end(), &lvalue, &errorMessage))
+      return ::testing::AssertionFailure() << errorMessage;
     Json::Value rvalue;
-    if (!reader.parse(r, rvalue))
-      return ::testing::AssertionFailure()
-             << reader.getFormattedErrorMessages();
-    Json::StyledWriter writer;
+    if (!reader->parse(&*r.begin(), &*r.end(), &rvalue, &errorMessage))
+      return ::testing::AssertionFailure() << errorMessage;
+    Json::StreamWriterBuilder factory;
     return lvalue == rvalue
                ? (::testing::AssertionSuccess() << "Both are \n"
-                                                << writer.write(lvalue))
-               : (::testing::AssertionFailure()
-                  << writer.write(lvalue) << "\n does not equal \n"
-                  << writer.write(rvalue));
+                                                << Json::writeString(factory, lvalue))
+               : (::testing::AssertionFailure() << Json::writeString(factory, lvalue)
+                                                << "\n does not equal \n"
+                                                << Json::writeString(factory, rvalue));
   }
 
   bool EqReformattedJson(const std::string& json, std::string* error) {
@@ -262,9 +254,8 @@ TEST_F(ScalarTest, Ok) {
 }
 
 using ScalarTestErrorParam = std::tuple<const char*, const char*>;
-class ScalarTestError
-    : public ScalarTest,
-      public ::testing::WithParamInterface<ScalarTestErrorParam> {};
+class ScalarTestError : public ScalarTest,
+                        public ::testing::WithParamInterface<ScalarTestErrorParam> {};
 
 TEST_P(ScalarTestError, Test) {
   std::string json;
@@ -273,8 +264,7 @@ TEST_P(ScalarTestError, Test) {
   auto formatted = FormatJson(json, &scalar_);
   ASSERT_TRUE(formatted.ok()) << formatted.error();
   EXPECT_FALSE(IsJsonEq(json, *formatted)) << message;
-  EXPECT_FALSE(EqReformattedJson(json, &error_))
-      << "EqReformattedJson should return false";
+  EXPECT_FALSE(EqReformattedJson(json, &error_)) << "EqReformattedJson should return false";
 }
 
 static const std::vector<ScalarTestErrorParam> gScalarTestErrorParams = {
@@ -287,8 +277,7 @@ static const std::vector<ScalarTestErrorParam> gScalarTestErrorParams = {
     {"{\"e\": 1}", "Should not allow integers for enums"},
 };
 
-INSTANTIATE_TEST_SUITE_P(Jsonpb, ScalarTestError,
-                         ::testing::ValuesIn(gScalarTestErrorParams));
+INSTANTIATE_TEST_SUITE_P(Jsonpb, ScalarTestError, ::testing::ValuesIn(gScalarTestErrorParams));
 
 int main(int argc, char** argv) {
   using ::testing::AddGlobalTestEnvironment;

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 #pragma once
 
 #include <unistd.h>
@@ -46,12 +45,9 @@ class JsonSchemaTestConfig {
   /**
    * If it returns true, tests are skipped when the file is not found.
    */
-  virtual bool optional() const {
-    return false;
-  }
+  virtual bool optional() const { return false; }
 };
-using JsonSchemaTestConfigFactory =
-    std::function<std::unique_ptr<JsonSchemaTestConfig>()>;
+using JsonSchemaTestConfigFactory = std::function<std::unique_ptr<JsonSchemaTestConfig>()>;
 
 template <typename T>
 class AbstractJsonSchemaTestConfig : public JsonSchemaTestConfig {
@@ -68,22 +64,18 @@ class AbstractJsonSchemaTestConfig : public JsonSchemaTestConfig {
 
 template <typename T>
 JsonSchemaTestConfigFactory MakeTestParam(const std::string& path) {
-  return [path]() {
-    return std::make_unique<AbstractJsonSchemaTestConfig<T>>(path);
-  };
+  return [path]() { return std::make_unique<AbstractJsonSchemaTestConfig<T>>(path); };
 }
 
-class JsonSchemaTest
-    : public ::testing::TestWithParam<JsonSchemaTestConfigFactory> {
+class JsonSchemaTest : public ::testing::TestWithParam<JsonSchemaTestConfigFactory> {
  public:
   void SetUp() override {
-    auto&& config =
-        ::testing::TestWithParam<JsonSchemaTestConfigFactory>::GetParam()();
+    auto&& config = ::testing::TestWithParam<JsonSchemaTestConfigFactory>::GetParam()();
     file_path_ = config->file_path();
 
     if (access(file_path_.c_str(), F_OK) == -1) {
-      ASSERT_EQ(ENOENT, errno) << "File '" << file_path_ << "' is not accessible: "
-                               << strerror(errno);
+      ASSERT_EQ(ENOENT, errno) << "File '" << file_path_
+                               << "' is not accessible: " << strerror(errno);
       ASSERT_TRUE(config->optional()) << "Missing mandatory file " << file_path_;
       GTEST_SKIP();
     }
@@ -92,12 +84,9 @@ class JsonSchemaTest
 
     object_ = config->CreateMessage();
     auto res = internal::JsonStringToMessage(json_, object_.get());
-    ASSERT_TRUE(res.ok()) << "Invalid format of file " << file_path_
-                          << ": " << res.error();
+    ASSERT_TRUE(res.ok()) << "Invalid format of file " << file_path_ << ": " << res.error();
   }
-  google::protobuf::Message* message() const {
-    return object_.get();
-  }
+  google::protobuf::Message* message() const { return object_.get(); }
   std::string file_path_;
   std::string json_;
   std::unique_ptr<google::protobuf::Message> object_;

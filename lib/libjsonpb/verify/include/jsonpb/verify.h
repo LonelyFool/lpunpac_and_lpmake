@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 #pragma once
 
 #include <sstream>
@@ -64,8 +63,8 @@ namespace jsonpb {
 //    path: path to navigate inside JSON tree. For example, {"foo", "bar"} for
 //    the value "string" in
 //          {"foo": {"bar" : "string"}}
-bool AllFieldsAreKnown(const google::protobuf::Message& message,
-                       const std::string& json, std::string* error);
+bool AllFieldsAreKnown(const google::protobuf::Message& message, const std::string& json,
+                       std::string* error);
 
 // Format the given JSON string according to Prototype T. This will serialize
 // the JSON string to a Prototype message, then re-print the message as JSON. By
@@ -78,14 +77,12 @@ bool AllFieldsAreKnown(const google::protobuf::Message& message,
 //   scratch_space: The scratch space to use to store the Protobuf message. It
 //   must be a pointer
 //                  to the schema that the JSON string conforms to.
-bool EqReformattedJson(const std::string& json,
-                       google::protobuf::Message* scratch_space,
+bool EqReformattedJson(const std::string& json, google::protobuf::Message* scratch_space,
                        std::string* error);
 
 namespace internal {
 // See EqReformattedJson().
-ErrorOr<std::string> FormatJson(const std::string& json,
-                                google::protobuf::Message* scratch_space);
+ErrorOr<std::string> FormatJson(const std::string& json, google::protobuf::Message* scratch_space);
 
 }  // namespace internal
 

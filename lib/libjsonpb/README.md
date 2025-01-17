@@ -50,7 +50,7 @@ code must be converted to use `libjsonpbparse` for consistency.
 This library provides functions and tests to examine a JSON file and validate
 it against a Protobuf message definition.
 
-In addition to a sanity check that `libprotobuf` can convert the JSON file to a
+In addition to a validity check that `libprotobuf` can convert the JSON file to a
 Protobuf message (using `libjsonpbparse`), it also checks the following:
 
 - Whether there are fields unknown to the schema. All fields in the JSON file

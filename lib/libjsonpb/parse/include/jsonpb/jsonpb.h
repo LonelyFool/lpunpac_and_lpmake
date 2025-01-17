@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 #pragma once
 
 #include <string>
@@ -37,12 +36,12 @@ ErrorOr<std::monostate> JsonStringToMessage(const std::string& content,
 // when the android tree gets updated
 template <typename T>
 ErrorOr<T> JsonStringToMessage(const std::string& content) {
-    ErrorOr<T> ret;
-    auto error = internal::JsonStringToMessage(content, &*ret);
-    if (!error.ok()) {
-        return MakeError<T>(error.error());
-    }
-    return ret;
+  ErrorOr<T> ret;
+  auto error = internal::JsonStringToMessage(content, &*ret);
+  if (!error.ok()) {
+    return MakeError<T>(error.error());
+  }
+  return ret;
 }
 
 // TODO: MessageToJsonString is a newly added function in protobuf
