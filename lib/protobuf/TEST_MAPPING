@@ -1,7 +1,0 @@
-{
-  "presubmit": [
-    {
-      "name": "libprotobuf_vendor_suffix_test"
-    }
-  ]
-}
