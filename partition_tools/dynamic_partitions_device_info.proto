@@ -20,12 +20,12 @@ package android;
 // Keep in sync with proto files on EDI backend. Otherwise, new fields will
 // go ignored.
 
-// Next: 6
+// Next: 7
 message DynamicPartitionsDeviceInfoProto {
     bool enabled = 1;
     bool retrofit = 2;
 
-    // Next: 7
+    // Next: 8
     message Partition {
         string name = 1;
         string group_name = 2 [json_name = "group_name"];
@@ -36,6 +36,8 @@ message DynamicPartitionsDeviceInfoProto {
         uint64 fs_size = 5 [json_name = "fs_size"];
         /** Used space of the filesystem. */
         uint64 fs_used = 6 [json_name = "fs_used"];
+        /**  Name of the filesystem. */
+        string fs_type = 7 [json_name = "fs_type"];
     }
     repeated Partition partitions = 3;
 
@@ -55,4 +57,14 @@ message DynamicPartitionsDeviceInfoProto {
         uint64 alignment_offset = 5 [json_name = "alignment_offset"];
     }
     repeated BlockDevice block_devices = 5 [json_name = "block_devices"];
+
+    // Next: 4
+    message SuperDevice {
+        string name = 1;
+        /** Used space in bytes */
+        uint64 used_size = 2 [json_name = "used_size"];
+        /** Total size of the super in bytes */
+        uint64 total_size = 3 [json_name = "total_size"];
+    }
+    SuperDevice super_device = 6 [json_name = "super_device"];
 }

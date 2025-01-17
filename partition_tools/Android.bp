@@ -14,6 +14,10 @@
 // limitations under the License.
 //
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 cc_defaults {
     name: "lp_defaults",
     cflags: [
@@ -53,6 +57,7 @@ cc_library_shared {
             shared_libs: [
                 "libcutils",
                 "libfs_mgr",
+                "libsnapshot",
             ],
         },
     },
@@ -106,6 +111,11 @@ cc_binary_host {
     srcs: [
         "lpmake.cc",
     ],
+    target: {
+        windows: {
+            enabled: true,
+        },
+    },
 }
 
 cc_binary_host {
@@ -138,16 +148,25 @@ cc_binary {
 
 cc_binary {
     name: "lpdumpd",
-    defaults: ["lp_defaults"],
+    defaults: [
+        "lp_defaults",
+        "libsnapshot_cow_defaults",
+        "libsnapshot_hal_deps",
+    ],
     init_rc: ["lpdumpd.rc"],
     shared_libs: [
         "libbase",
         "libbinder",
+        "libfs_mgr_binder",
         "liblog",
         "liblp",
         "liblpdump",
         "liblpdump_interface-cpp",
+        "libprotobuf-cpp-lite",
         "libutils",
+    ],
+    static_libs: [
+        "update_metadata-protos",
     ],
     srcs: [
         "lpdumpd.cc",

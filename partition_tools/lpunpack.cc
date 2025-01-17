@@ -21,6 +21,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -34,11 +35,12 @@
 
 using namespace android::fs_mgr;
 using android::base::unique_fd;
+using android::base::borrowed_fd;
 using SparsePtr = std::unique_ptr<sparse_file, decltype(&sparse_file_destroy)>;
 
 class ImageExtractor final {
   public:
-    ImageExtractor(unique_fd&& image_fd, std::unique_ptr<LpMetadata>&& metadata,
+    ImageExtractor(std::vector<unique_fd>&& image_fds, std::unique_ptr<LpMetadata>&& metadata,
                    std::unordered_set<std::string>&& partitions, const std::string& output_dir);
 
     bool Extract();
@@ -48,7 +50,7 @@ class ImageExtractor final {
     bool ExtractPartition(const LpMetadataPartition* partition);
     bool ExtractExtent(const LpMetadataExtent& extent, int output_fd);
 
-    unique_fd image_fd_;
+    std::vector<unique_fd> image_fds_;
     std::unique_ptr<LpMetadata> metadata_;
     std::unordered_set<std::string> partitions_;
     std::string output_dir_;
@@ -59,16 +61,15 @@ class ImageExtractor final {
 // file format.
 class SparseWriter final {
   public:
-    SparseWriter(int output_fd, int image_fd, uint32_t block_size);
+    SparseWriter(borrowed_fd output_fd, uint32_t block_size);
 
-    bool WriteExtent(const LpMetadataExtent& extent);
+    bool WriteExtent(borrowed_fd image_fd, const LpMetadataExtent& extent);
     bool Finish();
 
   private:
     bool WriteBlock(const uint8_t* data);
 
-    int output_fd_;
-    int image_fd_;
+    borrowed_fd output_fd_;
     uint32_t block_size_;
     off_t hole_size_ = 0;
 };
@@ -81,7 +82,14 @@ static int usage(int /* argc */, char* argv[]) {
             "Usage:\n"
             "  %s [options...] SUPER_IMAGE [OUTPUT_DIR]\n"
             "\n"
+            "The SUPER_IMAGE argument is mandatory and expected to contain\n"
+            "the metadata. Additional super images are referenced with '-i' as needed to extract\n"
+            "the desired partition[s].\n"
+            "Default OUTPUT_DIR is '.'.\n"
+            "\n"
             "Options:\n"
+            "  -i, --image=IMAGE        Use the given file as an additional super image.\n"
+            "                           This can be specified multiple times.\n"
             "  -p, --partition=NAME     Extract the named partition. This can\n"
             "                           be specified multiple times.\n"
             "  -S, --slot=NUM           Slot number (default is 0).\n",
@@ -92,6 +100,7 @@ static int usage(int /* argc */, char* argv[]) {
 int main(int argc, char* argv[]) {
     // clang-format off
     struct option options[] = {
+        { "image",      required_argument,  nullptr, 'i' },
         { "partition",  required_argument,  nullptr, 'p' },
         { "slot",       required_argument,  nullptr, 'S' },
         { nullptr,      0,                  nullptr, 0 },
@@ -100,6 +109,7 @@ int main(int argc, char* argv[]) {
 
     uint32_t slot_num = 0;
     std::unordered_set<std::string> partitions;
+    std::vector<std::string> image_files;
 
     int rv, index;
     while ((rv = getopt_long_only(argc, argv, "+p:sh", options, &index)) != -1) {
@@ -116,6 +126,9 @@ int main(int argc, char* argv[]) {
                     return usage(argc, argv);
                 }
                 break;
+            case 'i':
+                image_files.push_back(optarg);
+                break;
             case 'p':
                 partitions.emplace(optarg);
                 break;
@@ -126,66 +139,78 @@ int main(int argc, char* argv[]) {
         std::cerr << "Missing super image argument.\n";
         return usage(argc, argv);
     }
-    std::string super_path = argv[optind++];
+    image_files.emplace(image_files.begin(), argv[optind++]);
 
     std::string output_dir = ".";
     if (optind + 1 <= argc) {
         output_dir = argv[optind++];
     }
 
-    if (optind < argc) {
-        std::cerr << "Unrecognized command-line arguments.\n";
-        return usage(argc, argv);
-    }
+    std::unique_ptr<LpMetadata> metadata;
+    std::vector<unique_fd> fds;
 
-    // Done reading arguments; open super.img. PartitionOpener will decorate
-    // relative paths with /dev/block/by-name, so get an absolute path here.
-    std::string abs_super_path;
-    if (!android::base::Realpath(super_path, &abs_super_path)) {
-        std::cerr << "realpath failed: " << super_path << ": " << strerror(errno) << "\n";
-        return EX_OSERR;
-    }
+    for (std::size_t index = 0; index < image_files.size(); ++index) {
+        std::string super_path = image_files[index];
 
-    unique_fd fd(open(super_path.c_str(), O_RDONLY | O_CLOEXEC));
-    if (fd < 0) {
-        std::cerr << "open failed: " << abs_super_path << ": " << strerror(errno) << "\n";
-        return EX_OSERR;
-    }
+        // Done reading arguments; open super.img. PartitionOpener will decorate
+        // relative paths with /dev/block/by-name, so get an absolute path here.
+        std::string abs_super_path;
+        if (!android::base::Realpath(super_path, &abs_super_path)) {
+            std::cerr << "realpath failed: " << super_path << ": " << strerror(errno) << "\n";
+            return EX_OSERR;
+        }
 
-    auto metadata = ReadMetadata(abs_super_path, slot_num);
-    if (!metadata) {
+        unique_fd fd(open(super_path.c_str(), O_RDONLY | O_CLOEXEC));
+        if (fd < 0) {
+            std::cerr << "open failed: " << abs_super_path << ": " << strerror(errno) << "\n";
+            return EX_OSERR;
+        }
+
         SparsePtr ptr(sparse_file_import(fd, false, false), sparse_file_destroy);
         if (ptr) {
-            std::cerr << "This image appears to be a sparse image. It must be "
-                         "unsparsed to be"
-                      << " unpacked.\n";
+            std::cerr << "The image file '"
+                      << super_path
+                      << "' appears to be a sparse image. It must be unsparsed to be unpacked.\n";
             return EX_USAGE;
         }
-        std::cerr << "Image does not appear to be in super-partition format.\n";
-        return EX_USAGE;
+
+        if (!metadata) {
+            metadata = ReadMetadata(abs_super_path, slot_num);
+            if (!metadata) {
+                std::cerr << "Could not read metadata from the super image file '"
+                          << super_path
+                          << "'.\n";
+                return EX_USAGE;
+            }
+        }
+
+        fds.emplace_back(std::move(fd));
     }
 
-    ImageExtractor extractor(std::move(fd), std::move(metadata), std::move(partitions), output_dir);
+    // Now do actual extraction.
+    ImageExtractor extractor(std::move(fds), std::move(metadata), std::move(partitions), output_dir);
     if (!extractor.Extract()) {
         return EX_SOFTWARE;
     }
     return EX_OK;
 }
 
-ImageExtractor::ImageExtractor(unique_fd&& image_fd, std::unique_ptr<LpMetadata>&& metadata,
+ImageExtractor::ImageExtractor(std::vector<unique_fd>&& image_fds, std::unique_ptr<LpMetadata>&& metadata,
                                std::unordered_set<std::string>&& partitions,
                                const std::string& output_dir)
-    : image_fd_(std::move(image_fd)),
+    : image_fds_(std::move(image_fds)),
       metadata_(std::move(metadata)),
       partitions_(std::move(partitions)),
       output_dir_(output_dir) {}
 
 bool ImageExtractor::Extract() {
+    std::filesystem::create_directories(output_dir_);
     if (!BuildPartitionList()) {
         return false;
     }
 
     for (const auto& [name, info] : partition_map_) {
+        std::cout << "Attempting to extract partition '" << name << "'...\n";
         if (!ExtractPartition(info)) {
             return false;
         }
@@ -217,13 +242,14 @@ bool ImageExtractor::ExtractPartition(const LpMetadataPartition* partition) {
     for (uint32_t i = 0; i < partition->num_extents; i++) {
         uint32_t index = partition->first_extent_index + i;
         const LpMetadataExtent& extent = metadata_->extents[index];
+        std::cout << "  Dealing with extent " << i << " from target source " << extent.target_source << "...\n";
 
         if (extent.target_type != LP_TARGET_TYPE_LINEAR) {
             std::cerr << "Unsupported target type in extent: " << extent.target_type << "\n";
             return false;
         }
-        if (extent.target_source != 0) {
-            std::cerr << "Split super devices are not supported.\n";
+        if (extent.target_source >= image_fds_.size()) {
+            std::cerr << "Insufficient number of super images passed, need at least " << extent.target_source + 1 << ".\n";
             return false;
         }
         total_size += extent.num_sectors * LP_SECTOR_SIZE;
@@ -237,28 +263,28 @@ bool ImageExtractor::ExtractPartition(const LpMetadataPartition* partition) {
         return false;
     }
 
-    SparseWriter writer(output_fd, image_fd_, metadata_->geometry.logical_block_size);
+    SparseWriter writer(output_fd, metadata_->geometry.logical_block_size);
 
     // Extract each extent into output_fd.
     for (uint32_t i = 0; i < partition->num_extents; i++) {
         uint32_t index = partition->first_extent_index + i;
         const LpMetadataExtent& extent = metadata_->extents[index];
 
-        if (!writer.WriteExtent(extent)) {
+        if (!writer.WriteExtent(image_fds_[extent.target_source], extent)) {
             return false;
         }
     }
     return writer.Finish();
 }
 
-SparseWriter::SparseWriter(int output_fd, int image_fd, uint32_t block_size)
-    : output_fd_(output_fd), image_fd_(image_fd), block_size_(block_size) {}
+SparseWriter::SparseWriter(borrowed_fd output_fd, uint32_t block_size)
+    : output_fd_(output_fd), block_size_(block_size) {}
 
-bool SparseWriter::WriteExtent(const LpMetadataExtent& extent) {
+bool SparseWriter::WriteExtent(borrowed_fd image_fd, const LpMetadataExtent& extent) {
     auto buffer = std::make_unique<uint8_t[]>(block_size_);
 
     off_t super_offset = extent.target_data * LP_SECTOR_SIZE;
-    if (lseek(image_fd_, super_offset, SEEK_SET) < 0) {
+    if (lseek(image_fd.get(), super_offset, SEEK_SET) < 0) {
         std::cerr << "image lseek failed: " << strerror(errno) << "\n";
         return false;
     }
@@ -269,7 +295,7 @@ bool SparseWriter::WriteExtent(const LpMetadataExtent& extent) {
             std::cerr << "extent is not block-aligned\n";
             return false;
         }
-        if (!android::base::ReadFully(image_fd_, buffer.get(), block_size_)) {
+        if (!android::base::ReadFully(image_fd, buffer.get(), block_size_)) {
             std::cerr << "read failed: " << strerror(errno) << "\n";
             return false;
         }
@@ -297,7 +323,7 @@ bool SparseWriter::WriteBlock(const uint8_t* data) {
     }
 
     if (hole_size_) {
-        if (lseek(output_fd_, hole_size_, SEEK_CUR) < 0) {
+        if (lseek(output_fd_.get(), hole_size_, SEEK_CUR) < 0) {
             std::cerr << "lseek failed: " << strerror(errno) << "\n";
             return false;
         }
@@ -312,12 +338,12 @@ bool SparseWriter::WriteBlock(const uint8_t* data) {
 
 bool SparseWriter::Finish() {
     if (hole_size_) {
-        off_t offset = lseek(output_fd_, 0, SEEK_CUR);
+        off_t offset = lseek(output_fd_.get(), 0, SEEK_CUR);
         if (offset < 0) {
             std::cerr << "lseek failed: " << strerror(errno) << "\n";
             return false;
         }
-        if (ftruncate(output_fd_, offset + hole_size_) < 0) {
+        if (ftruncate(output_fd_.get(), offset + hole_size_) < 0) {
             std::cerr << "ftruncate failed: " << strerror(errno) << "\n";
             return false;
         }

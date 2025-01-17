@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <android-base/logging.h>
+#include <android-base/properties.h>
 #include <android-base/strings.h>
 #include <android/lpdump/BnLpdump.h>
 #include <android/lpdump/ILpdump.h>

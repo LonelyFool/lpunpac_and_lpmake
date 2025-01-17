@@ -17,17 +17,37 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
+#ifndef WIN32
 #include <sysexits.h>
+#endif
+#include <unistd.h>
 
+#include <algorithm>
 #include <memory>
 
 #include <android-base/parseint.h>
+#include <android-base/result.h>
 #include <android-base/strings.h>
+#include <android-base/unique_fd.h>
 #include <liblp/builder.h>
 #include <liblp/liblp.h>
 
 using namespace android;
 using namespace android::fs_mgr;
+
+using android::base::Error;
+using android::base::Result;
+using android::base::unique_fd;
+
+#ifdef WIN32
+static constexpr int EX_OK = 0;
+static constexpr int EX_USAGE = 1;
+static constexpr int EX_SOFTWARE = 2;
+static constexpr int EX_CANTCREAT = 3;
+#else
+static constexpr int O_BINARY = 0;
+#endif
 
 /* Prints program usage to |where|. */
 static int usage(int /* argc */, char* argv[]) {
@@ -38,7 +58,10 @@ static int usage(int /* argc */, char* argv[]) {
             "  %s [options]\n"
             "\n"
             "Required options:\n"
-            "  -d,--device-size=SIZE         Size of the block device for logical partitions.\n"
+            "  -d,--device-size=[SIZE|auto]  Size of the block device for logical partitions.\n"
+            "                                Can be set to auto to automatically calculate the\n"
+            "                                minimum size, the sum of partition sizes plus\n"
+            "                                metadata-size times the number of partitions.\n"
             "  -m,--metadata-size=SIZE       Maximum size to reserve for partition metadata.\n"
             "  -s,--metadata-slots=COUNT     Number of slots to store metadata copies.\n"
             "  -p,--partition=DATA           Add a partition given the data, see below.\n"
@@ -108,6 +131,87 @@ enum class Option : int {
     kForceFullImage = 'F',
 };
 
+struct PartitionInfo {
+    std::string name;
+    uint64_t size;
+    uint32_t attribute_flags;
+    std::string group_name;
+
+    static Result<PartitionInfo> Parse(const char* arg) {
+        std::vector<std::string> parts = android::base::Split(arg, ":");
+        if (parts.size() > 4) {
+            return Error() << "Partition info has invalid formatting.";
+        }
+
+        std::string name = parts[0];
+        if (name.empty()) {
+            return Error() << "Partition must have a valid name.";
+        }
+
+        uint64_t size;
+        if (!android::base::ParseUint(parts[2].c_str(), &size)) {
+            return Error() << "Partition must have a valid size.";
+        }
+
+        uint32_t attribute_flags = 0;
+        std::string attributes = parts[1];
+        if (attributes == "readonly") {
+            attribute_flags |= LP_PARTITION_ATTR_READONLY;
+        } else if (attributes != "none") {
+            return Error() << "Attribute not recognized: " << attributes;
+        }
+
+        std::string group_name = "default";
+        if (parts.size() >= 4) {
+            group_name = parts[3];
+        }
+
+        return PartitionInfo{name, size, attribute_flags, group_name};
+    }
+};
+
+static uint64_t CalculateBlockDeviceSize(uint32_t alignment, uint32_t metadata_size,
+                                         uint32_t metadata_slots,
+                                         const std::vector<PartitionInfo>& partitions) {
+    uint64_t ret = LP_PARTITION_RESERVED_BYTES;
+    ret += LP_METADATA_GEOMETRY_SIZE * 2;
+
+    // Each metadata slot has a primary and backup copy.
+    ret += metadata_slots * metadata_size * 2;
+
+    if (alignment) {
+        uint64_t remainder = ret % alignment;
+        uint64_t to_add = alignment - remainder;
+        if (to_add > std::numeric_limits<uint64_t>::max() - ret) {
+            return 0;
+        }
+        ret += to_add;
+    }
+
+    ret += partitions.size() * alignment;
+    for (const auto& partition_info : partitions) {
+        ret += partition_info.size;
+    }
+    return ret;
+}
+
+static bool GetFileSize(const std::string& path, uint64_t* size) {
+    unique_fd fd(open(path.c_str(), O_RDONLY | O_BINARY));
+    if (fd < 0) {
+        fprintf(stderr, "Could not open file: %s: %s\n", path.c_str(), strerror(errno));
+        return false;
+    }
+
+    auto offs = lseek(fd.get(), 0, SEEK_END);
+    if (offs < 0) {
+        fprintf(stderr, "Failed to seek file: %s: %s\n", path.c_str(), strerror(errno));
+        return false;
+    }
+
+    *size = offs;
+    return true;
+}
+
 int main(int argc, char* argv[]) {
     struct option options[] = {
         { "device-size", required_argument, nullptr, (int)Option::kDeviceSize },
@@ -115,7 +219,7 @@ int main(int argc, char* argv[]) {
         { "metadata-slots", required_argument, nullptr, (int)Option::kMetadataSlots },
         { "partition", required_argument, nullptr, (int)Option::kPartition },
         { "output", required_argument, nullptr, (int)Option::kOutput },
-        { "help", no_argument, nullptr, (int)Option::kOutput },
+        { "help", no_argument, nullptr, (int)Option::kHelp },
         { "alignment-offset", required_argument, nullptr, (int)Option::kAlignmentOffset },
         { "alignment", required_argument, nullptr, (int)Option::kAlignment },
         { "sparse", no_argument, nullptr, (int)Option::kSparse },
@@ -138,7 +242,7 @@ int main(int argc, char* argv[]) {
     uint32_t block_size = 4096;
     std::string super_name = "super";
     std::string output_path;
-    std::vector<std::string> partitions;
+    std::vector<PartitionInfo> partitions;
     std::vector<std::string> groups;
     std::vector<BlockDeviceInfo> block_devices;
     std::map<std::string, std::string> images;
@@ -147,6 +251,7 @@ int main(int argc, char* argv[]) {
     bool auto_slot_suffixing = false;
     bool force_full_image = false;
     bool virtual_ab = false;
+    bool auto_blockdevice_size = false;
 
     int rv;
     int index;
@@ -155,7 +260,10 @@ int main(int argc, char* argv[]) {
             case Option::kHelp:
                 return usage(argc, argv);
             case Option::kDeviceSize:
-                if (!android::base::ParseUint(optarg, &blockdevice_size) || !blockdevice_size) {
+                if (strcmp(optarg, "auto") == 0) {
+                    auto_blockdevice_size = true;
+                } else if (!android::base::ParseUint(optarg, &blockdevice_size) ||
+                           !blockdevice_size) {
                     fprintf(stderr, "Invalid argument to --device-size.\n");
                     return EX_USAGE;
                 }
@@ -174,7 +282,12 @@ int main(int argc, char* argv[]) {
                 }
                 break;
             case Option::kPartition:
-                partitions.push_back(optarg);
+                if (auto res = PartitionInfo::Parse(optarg); !res.ok()) {
+                    fprintf(stderr, "%s\n", res.error().message().c_str());
+                    return EX_USAGE;
+                } else {
+                    partitions.push_back(std::move(*res));
+                }
                 break;
             case Option::kGroup:
                 groups.push_back(optarg);
@@ -270,6 +383,15 @@ int main(int argc, char* argv[]) {
         return usage(argc, argv);
     }
 
+    if (auto_blockdevice_size) {
+        blockdevice_size =
+                CalculateBlockDeviceSize(alignment, metadata_size, metadata_slots, partitions);
+        if (!blockdevice_size) {
+            fprintf(stderr, "Invalid block device parameters.\n");
+            return EX_USAGE;
+        }
+    }
+
     // Must specify a block device via the old method (--device-size etc) or
     // via --device, but not both.
     if ((has_implied_super && (!block_devices.empty() || !blockdevice_size)) ||
@@ -345,50 +467,31 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    for (const auto& partition_info : partitions) {
-        std::vector<std::string> parts = android::base::Split(partition_info, ":");
-        if (parts.size() > 4) {
-            fprintf(stderr, "Partition info has invalid formatting.\n");
-            return EX_USAGE;
-        }
-
-        std::string name = parts[0];
-        if (name.empty()) {
-            fprintf(stderr, "Partition must have a valid name.\n");
-            return EX_USAGE;
-        }
-
-        uint64_t size;
-        if (!android::base::ParseUint(parts[2].c_str(), &size)) {
-            fprintf(stderr, "Partition must have a valid size.\n");
-            return EX_USAGE;
-        }
-
-        uint32_t attribute_flags = 0;
-        std::string attributes = parts[1];
-        if (attributes == "readonly") {
-            attribute_flags |= LP_PARTITION_ATTR_READONLY;
-        } else if (attributes != "none") {
-            fprintf(stderr, "Attribute not recognized: %s\n", attributes.c_str());
-            return EX_USAGE;
-        }
-
-        std::string group_name = "default";
-        if (parts.size() >= 4) {
-            group_name = parts[3];
-        }
-
-        Partition* partition = builder->AddPartition(name, group_name, attribute_flags);
+    for (auto& partition_info : partitions) {
+        Partition* partition = builder->AddPartition(partition_info.name, partition_info.group_name,
+                                                     partition_info.attribute_flags);
         if (!partition) {
-            fprintf(stderr, "Could not add partition: %s\n", name.c_str());
+            fprintf(stderr, "Could not add partition: %s\n", partition_info.name.c_str());
             return EX_SOFTWARE;
         }
-        if (!builder->ResizePartition(partition, size)) {
+        if (!partition_info.size) {
+            // Deduce the size automatically.
+            if (auto iter = images.find(partition_info.name); iter != images.end()) {
+                if (!GetFileSize(iter->second, &partition_info.size)) {
+                    return EX_SOFTWARE;
+                }
+            }
+        }
+        if (!builder->ResizePartition(partition, partition_info.size)) {
             fprintf(stderr, "Not enough space on device for partition %s with size %" PRIu64 "\n",
-                    name.c_str(), size);
+                    partition_info.name.c_str(), partition_info.size);
             return EX_SOFTWARE;
         }
     }
+
+    // unlink before writing, in case it is being used by an emulator or other program,
+    // we don't want to break that program by changing the data it is accessing.
+    unlink(output_path.c_str());
 
     std::unique_ptr<LpMetadata> metadata = builder->Export();
     if (!images.empty() || force_full_image) {
