@@ -9,7 +9,11 @@
 #define FMT_POSIX_TEST_H
 
 #include <errno.h>
+#include <locale.h>
 #include <stdio.h>
+#ifdef __APPLE__
+#  include <xlocale.h>
+#endif
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -26,15 +30,13 @@ namespace test {
 
 #ifndef _MSC_VER
 // Size type for read and write.
-typedef size_t size_t;
-typedef ssize_t ssize_t;
+using size_t = size_t;
+using ssize_t = ssize_t;
 int open(const char* path, int oflag, int mode);
 int fstat(int fd, struct stat* buf);
 #else
-typedef unsigned size_t;
-typedef int ssize_t;
-errno_t sopen_s(int* pfh, const char* filename, int oflag, int shflag,
-                int pmode);
+using size_t = unsigned;
+using ssize_t = int;
 #endif
 
 #ifndef _WIN32
@@ -62,6 +64,10 @@ int pipe(int* pfds, unsigned psize, int textmode);
 FILE* fopen(const char* filename, const char* mode);
 int fclose(FILE* stream);
 int(fileno)(FILE* stream);
+
+#if defined(FMT_LOCALE) && !defined(_WIN32)
+locale_t newlocale(int category_mask, const char* locale, locale_t base);
+#endif
 }  // namespace test
 
 #define FMT_SYSTEM(call) test::call

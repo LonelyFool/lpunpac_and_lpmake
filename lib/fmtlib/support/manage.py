@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """Manage site and releases.
 
@@ -12,9 +12,8 @@ obtained from https://github.com/settings/tokens.
 
 from __future__ import print_function
 import datetime, docopt, errno, fileinput, json, os
-import re, requests, shutil, sys, tempfile
+import re, requests, shutil, sys
 from contextlib import contextmanager
-from distutils.version import LooseVersion
 from subprocess import check_call
 
 
@@ -76,36 +75,10 @@ def create_build_env():
     class Env:
         pass
     env = Env()
-
-    # Import the documentation build module.
     env.fmt_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.insert(0, os.path.join(env.fmt_dir, 'doc'))
-    import build
-
     env.build_dir = 'build'
-    env.versions = build.versions
-
-    # Virtualenv and repos are cached to speed up builds.
-    build.create_build_env(os.path.join(env.build_dir, 'virtualenv'))
-
     env.fmt_repo = Git(os.path.join(env.build_dir, 'fmt'))
     return env
-
-
-@contextmanager
-def rewrite(filename):
-    class Buffer:
-        pass
-    buffer = Buffer()
-    if not os.path.exists(filename):
-        buffer.data = ''
-        yield buffer
-        return
-    with open(filename) as f:
-        buffer.data = f.read()
-    yield buffer
-    with open(filename, 'w') as f:
-        f.write(buffer.data)
 
 
 fmt_repo_url = 'git@github.com:fmtlib/fmt'
@@ -114,71 +87,30 @@ fmt_repo_url = 'git@github.com:fmtlib/fmt'
 def update_site(env):
     env.fmt_repo.update(fmt_repo_url)
 
-    doc_repo = Git(os.path.join(env.build_dir, 'fmtlib.github.io'))
-    doc_repo.update('git@github.com:fmtlib/fmtlib.github.io')
+    doc_repo = Git(os.path.join(env.build_dir, 'fmt.dev'))
+    doc_repo.update('git@github.com:fmtlib/fmt.dev')
 
-    for version in env.versions:
-        clean_checkout(env.fmt_repo, version)
-        target_doc_dir = os.path.join(env.fmt_repo.dir, 'doc')
-        # Remove the old theme.
-        for entry in os.listdir(target_doc_dir):
-            path = os.path.join(target_doc_dir, entry)
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-        # Copy the new theme.
-        for entry in ['_static', '_templates', 'basic-bootstrap', 'bootstrap',
-                      'conf.py', 'fmt.less']:
-            src = os.path.join(env.fmt_dir, 'doc', entry)
-            dst = os.path.join(target_doc_dir, entry)
-            copy = shutil.copytree if os.path.isdir(src) else shutil.copyfile
-            copy(src, dst)
-        # Rename index to contents.
-        contents = os.path.join(target_doc_dir, 'contents.rst')
-        if not os.path.exists(contents):
-            os.rename(os.path.join(target_doc_dir, 'index.rst'), contents)
-        # Fix issues in reference.rst/api.rst.
-        for filename in ['reference.rst', 'api.rst']:
-            pattern = re.compile('doxygenfunction.. (bin|oct|hexu|hex)$', re.M)
-            with rewrite(os.path.join(target_doc_dir, filename)) as b:
-                b.data = b.data.replace('std::ostream &', 'std::ostream&')
-                b.data = re.sub(pattern, r'doxygenfunction:: \1(int)', b.data)
-                b.data = b.data.replace('std::FILE*', 'std::FILE *')
-                b.data = b.data.replace('unsigned int', 'unsigned')
-                b.data = b.data.replace('operator""_', 'operator"" _')
-                b.data = b.data.replace(', size_t', ', std::size_t')
-        # Fix a broken link in index.rst.
-        index = os.path.join(target_doc_dir, 'index.rst')
-        with rewrite(index) as b:
-            b.data = b.data.replace(
-                'doc/latest/index.html#format-string-syntax', 'syntax.html')
-        # Build the docs.
-        html_dir = os.path.join(env.build_dir, 'html')
-        if os.path.exists(html_dir):
-            shutil.rmtree(html_dir)
-        include_dir = env.fmt_repo.dir
-        if LooseVersion(version) >= LooseVersion('5.0.0'):
-            include_dir = os.path.join(include_dir, 'include', 'fmt')
-        elif LooseVersion(version) >= LooseVersion('3.0.0'):
-            include_dir = os.path.join(include_dir, 'fmt')
-        import build
-        build.build_docs(version, doc_dir=target_doc_dir,
-                         include_dir=include_dir, work_dir=env.build_dir)
-        shutil.rmtree(os.path.join(html_dir, '.doctrees'))
-        # Create symlinks for older versions.
-        for link, target in {'index': 'contents', 'api': 'reference'}.items():
-            link = os.path.join(html_dir, link) + '.html'
-            target += '.html'
-            if os.path.exists(os.path.join(html_dir, target)) and \
-               not os.path.exists(link):
-                os.symlink(target, link)
-        # Copy docs to the website.
-        version_doc_dir = os.path.join(doc_repo.dir, version)
-        try:
-            shutil.rmtree(version_doc_dir)
-        except OSError as e:
-            if e.errno != errno.ENOENT:
-                raise
-        shutil.move(html_dir, version_doc_dir)
+    version = '11.0.0'
+    clean_checkout(env.fmt_repo, version)
+    target_doc_dir = os.path.join(env.fmt_repo.dir, 'doc')
+
+    # Build the docs.
+    html_dir = os.path.join(env.build_dir, 'html')
+    if os.path.exists(html_dir):
+        shutil.rmtree(html_dir)
+    include_dir = env.fmt_repo.dir
+    import build
+    build.build_docs(version, doc_dir=target_doc_dir,
+                        include_dir=include_dir, work_dir=env.build_dir)
+    shutil.rmtree(os.path.join(html_dir, '.doctrees'))
+    # Copy docs to the website.
+    version_doc_dir = os.path.join(doc_repo.dir, version)
+    try:
+        shutil.rmtree(version_doc_dir)
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            raise
+    shutil.move(html_dir, version_doc_dir)
 
 
 def release(args):
@@ -191,56 +123,76 @@ def release(args):
     if not fmt_repo.update('-b', branch, fmt_repo_url):
         clean_checkout(fmt_repo, branch)
 
-    # Convert changelog from RST to GitHub-flavored Markdown and get the
-    # version.
-    changelog = 'ChangeLog.rst'
+    # Update the date in the changelog and extract the version and the first
+    # section content.
+    changelog = 'ChangeLog.md'
     changelog_path = os.path.join(fmt_repo.dir, changelog)
-    import rst2md
-    changes, version = rst2md.convert(changelog_path)
-    cmakelists = 'CMakeLists.txt'
-    for line in fileinput.input(os.path.join(fmt_repo.dir, cmakelists),
-                                inplace=True):
-        prefix = 'set(FMT_VERSION '
-        if line.startswith(prefix):
-            line = prefix + version + ')\n'
+    is_first_section = True
+    first_section = []
+    for i, line in enumerate(fileinput.input(changelog_path, inplace=True)):
+        if i == 0:
+            version = re.match(r'# (.*) - TBD', line).group(1)
+            line = '# {} - {}\n'.format(
+                version, datetime.date.today().isoformat())
+        elif not is_first_section:
+            pass
+        elif line.startswith('#'):
+            is_first_section = False
+        else:
+            first_section.append(line)
         sys.stdout.write(line)
+    if first_section[0] == '\n':
+        first_section.pop(0)
 
-    # Update the version in the changelog.
-    title_len = 0
-    for line in fileinput.input(changelog_path, inplace=True):
-        if line.decode('utf-8').startswith(version + ' - TBD'):
-            line = version + ' - ' + datetime.date.today().isoformat()
-            title_len = len(line)
-            line += '\n'
-        elif title_len:
-            line = '-' * title_len + '\n'
-            title_len = 0
-        sys.stdout.write(line)
+    ns_version = None
+    base_h_path = os.path.join(fmt_repo.dir, 'include', 'fmt', 'base.h')
+    for line in fileinput.input(base_h_path):
+        m = re.match(r'\s*inline namespace v(.*) .*', line)
+        if m:
+            ns_version = m.group(1)
+            break
+    major_version = version.split('.')[0]
+    if not ns_version or ns_version != major_version:
+        raise Exception(f'Version mismatch {ns_version} != {major_version}')
 
-    # Add the version to the build script.
-    script = os.path.join('doc', 'build.py')
-    script_path = os.path.join(fmt_repo.dir, script)
-    for line in fileinput.input(script_path, inplace=True):
-      m = re.match(r'( *versions = )\[(.+)\]', line)
-      if m:
-        line = '{}[{}, \'{}\']\n'.format(m.group(1), m.group(2), version)
-      sys.stdout.write(line)
+    # Workaround GitHub-flavored Markdown treating newlines as <br>.
+    changes = ''
+    code_block = False
+    stripped = False
+    for line in first_section:
+        if re.match(r'^\s*```', line):
+            code_block = not code_block
+            changes += line
+            stripped = False
+            continue
+        if code_block:
+            changes += line
+            continue
+        if line == '\n' or re.match(r'^\s*\|.*', line):
+            if stripped:
+                changes += '\n'
+                stripped = False
+            changes += line
+            continue
+        if stripped:
+            line = ' ' + line.lstrip()
+        changes += line.rstrip()
+        stripped = True
 
     fmt_repo.checkout('-B', 'release')
-    fmt_repo.add(changelog, cmakelists, script)
+    fmt_repo.add(changelog)
     fmt_repo.commit('-m', 'Update version')
 
     # Build the docs and package.
     run = Runner(fmt_repo.dir)
     run('cmake', '.')
     run('make', 'doc', 'package_source')
-    update_site(env)
 
     # Create a release on GitHub.
     fmt_repo.push('origin', 'release')
-    params = {'access_token': os.getenv('FMT_TOKEN')}
+    auth_headers = {'Authorization': 'token ' + os.getenv('FMT_TOKEN')}
     r = requests.post('https://api.github.com/repos/fmtlib/fmt/releases',
-                      params=params,
+                      headers=auth_headers,
                       data=json.dumps({'tag_name': version,
                                        'target_commitish': 'release',
                                        'body': changes, 'draft': True}))
@@ -251,11 +203,12 @@ def release(args):
     package = 'fmt-{}.zip'.format(version)
     r = requests.post(
         '{}/{}/assets?name={}'.format(uploads_url, id, package),
-        headers={'Content-Type': 'application/zip'},
-        params=params, data=open('build/fmt/' + package, 'rb'))
+        headers={'Content-Type': 'application/zip'} | auth_headers,
+        data=open('build/fmt/' + package, 'rb'))
     if r.status_code != 201:
         raise Exception('Failed to upload an asset ' + str(r))
 
+    update_site(env)
 
 if __name__ == '__main__':
     args = docopt.docopt(__doc__)
